@@ -1,53 +1,30 @@
-# High-Concurrency Ticket API (Redis Caching & Rate Limiting)
-
-When a web application scales from 100 to 100,000+ concurrent users, the relational database quickly becomes the primary system bottleneck. This project demonstrates how to optimize API performance under heavy load (simulating a high-demand event like a VIP concert flash-sale) by introducing **Redis** as a high-performance caching and protective layer.
-
----
-
-## 🏗️ System Architecture
-
+High-Concurrency Ticket API (Redis Caching & Rate Limiting)
+When a web application scales from 100 to 100,000+ concurrent users, the relational database quickly becomes the primary system bottleneck. This project demonstrates how to optimize API performance under heavy load (simulating a high-demand event like a VIP concert flash-sale) by introducing Redis as a high-performance caching and protective layer.
+🏗️ System Architecture
 Instead of allowing every influx of traffic to hit the database directly, the system uses a dual-layer protection mechanism:
-
-* **Rate Limiter (The Shield):** Identifies incoming traffic by IP and uses an atomic Fixed-Window algorithm in Redis to instantly reject spam or bot behavior before it executes heavy business logic.
-* **Cache-Aside Layer:** Legitimately allowed requests fetch data straight from memory (Redis RAM) with an ultra-fast lookup, shielding PostgreSQL from redundant disk I/O queries.
-
----
-
-## 🛠️ Tech Stack & Infrastructure
-
-* **Runtime & Framework:** Node.js with **Fastify** (chosen over Express for its low-overhead, high-concurrency architecture).
-* **Database:** PostgreSQL (simulating persistent ticket inventory storage).
-* **In-Memory Store:** Redis (acting simultaneously as the Rate Limiter backend and the Cache layer).
-* **Load Testing:** **k6** by Grafana (used to execute real-world stress tests with hundreds of virtual users).
-* **Containerization:** Docker & Docker Compose.
-
----
-
-## 📊 Load Testing Benchmarks (200 Concurrent VUs)
-
+Rate Limiter (The Shield): Identifies incoming traffic by IP and uses an atomic Fixed-Window algorithm in Redis to instantly reject spam or bot behavior before it executes heavy business logic.
+Cache-Aside Layer: Legitimately allowed requests fetch data straight from memory (Redis RAM) with an ultra-fast lookup, shielding PostgreSQL from redundant disk I/O queries.
+🛠️ Tech Stack & Infrastructure
+Runtime & Framework: Node.js with Fastify (chosen over Express for its low-overhead, high-concurrency architecture).
+Database: PostgreSQL (simulating persistent ticket inventory storage).
+In-Memory Store: Redis (acting simultaneously as the Rate Limiter backend and the Cache layer).
+Load Testing: k6 by Grafana (used to execute real-world stress tests with hundreds of virtual users).
+Containerization: Docker & Docker Compose.
+📊 Load Testing Benchmarks (200 Concurrent VUs)
 Here is the actual data captured from testing the endpoint with 200 Virtual Users flooding the system simultaneously for 15 seconds:
-
-| Metric | Unoptimized Route (Direct SQL + Simulated Load) | Optimized Route (Redis Shield + Cache) |
-| :--- | :--- | :--- |
-| **Total Requests Handled** | 14,155 requests | **28,341 requests** *(~2x Capacity)* |
-| **Requests / Second (`http_reqs`)** | ~931 req/s | **~1,883 req/s** |
-| **Average Latency (`avg`)** | **112.67 ms** | **4.84 ms** *(~23x Faster)* |
-| **95th Percentile Latency (`p(95)`)** | **126.96 ms** | **10.19 ms** |
-| **Request Failure Rate** | 0.00% *(System lagged under queue)* | **99.85%** *(Intentionally blocked by Rate Limiter)* |
-
-### 🧠 Technical Insights
-
-* **The Bottleneck (Unoptimized):** When traffic spikes, connection pooling limits (`max: 50`) force concurrent users into a queue while PostgreSQL handles database queries. Latency instantly degrades to over **112ms**, dragging down the overall throughput of the server.
-* **The Solution (Optimized):** With Redis active, the API processes allowed requests at an incredible sub-5ms speed. Scripted bots or aggressive users hitting the API thousands of times are caught by the `INCR` window block and issued an immediate **HTTP 429 Too Many Requests**, completely insulating the core infrastructure.
-
----
-
-## 💻 Code Architecture Overview
-
-### 1. The Redis Rate Limiter Middleware
-Uses an atomic `INCR` operations strategy to log visits within a specific time frame, returning a quick error response if thresholds are violated.
-
-```javascript
+Metric	Unoptimized Route (Direct SQL + Simulated Load)	Optimized Route (Redis Shield + Cache)
+Total Requests Handled	14,155 requests	28,341 requests (~2x Capacity)
+Requests / Second (http_reqs)	~931 req/s	~1,883 req/s
+Average Latency (avg)	112.67 ms	4.84 ms (~23x Faster)
+95th Percentile Latency (p(95))	126.96 ms	10.19 ms
+Request Failure Rate	0.00% (System lagged under queue)	99.85% (Intentionally blocked by Rate Limiter)
+🧠 Technical Insights
+The Bottleneck (Unoptimized): When traffic spikes, connection pooling limits (max: 50) force concurrent users into a queue while PostgreSQL handles database queries. Latency instantly degrades to over 112ms, dragging down the overall throughput of the server.
+The Solution (Optimized): With Redis active, the API processes allowed requests at an incredible sub-5ms speed. Scripted bots or aggressive users hitting the API thousands of times are caught by the INCR window block and issued an immediate HTTP 429 Too Many Requests, completely insulating the core infrastructure.
+💻 Code Architecture Overview
+1. The Redis Rate Limiter Middleware
+Uses an atomic INCR operations strategy to log visits within a specific time frame, returning a quick error response if thresholds are violated.
+JavaScript
 async function rateLimiter(request, reply) {
   const ip = request.ip;
   const key = `rate:limit:${ip}`;
@@ -74,13 +51,11 @@ fastify.get('/optimized/ticket', { preHandler: rateLimiter }, async (request, re
   const cacheKey = 'ticket:1';
   
   const cachedData = await redis.get(cacheKey);
-  if (cachedData) return JSON.parse(cachedData); // Cache Hit
+  if (cachedData) return JSON.parse(cachedData);
 
-  // Cache Miss -> Fallback to PostgreSQL
   const result = await pgPool.query('SELECT * FROM events WHERE id = 1');
   const ticketData = result.rows[0];
 
-  // Save back to Redis cache with a 30-second TTL
   await redis.set(cacheKey, JSON.stringify(ticketData), 'EX', 30);
   return ticketData;
 });
